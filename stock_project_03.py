@@ -4,7 +4,6 @@ ParameterGrid 是 scikit-learn 库中用于生成参数网格的工具，它可�
 """
 
 from sklearn.model_selection import ParameterGrid
-import matplotlib.pyplot as plt
 import pandas as pd
 import akshare as ak
 
@@ -60,4 +59,4 @@ for params in ParameterGrid(param_grid):
 results_df = pd.DataFrame(results)
 print("\n参数优化结果排序：")
 print(results_df.sort_values('cumulative_return', ascending=False).head())
-results_df.to_csv(r'D:\python_project\tmp\参数优化组合.csv')
+results_df.to_csv(r'D:\stock\tmp\参数优化组合.csv')

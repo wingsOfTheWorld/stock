@@ -104,5 +104,5 @@ for symbol in etfs:
 
     plt.tight_layout()
     # 保存图像为 PNG 文件
-    plt.savefig(fr'D:\python_project\tmp\{symbol}.png')
+    plt.savefig(fr'D:\stock\tmp\{symbol}.png')
 
