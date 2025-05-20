@@ -7,6 +7,14 @@ import pandas as pd
 import talib  # 技术指标计算库
 import matplotlib.pyplot as plt
 
+# 设置中文字体（根据你的系统选择可用字体）
+plt.rcParams['font.sans-serif'] = ['SimHei']  # 适用于Windows
+# plt.rcParams['font.sans-serif'] = ['Arial Unicode MS']  # 适用于Mac
+# plt.rcParams['font.sans-serif'] = ['WenQuanYi Zen Hei']  # 适用于Linux
+
+# 解决保存图像时负号'-'显示为方块的问题
+plt.rcParams['axes.unicode_minus'] = False
+
 """
 Step 1：数据准备
 """
@@ -16,10 +24,13 @@ stock_code = "002050"
 stock_zh = ak.stock_zh_a_hist(symbol=stock_code, adjust="hfq")  # 后复权数据
 stock_zh['日期'] = pd.to_datetime(stock_zh['日期'])
 df = stock_zh.set_index('日期').sort_index()
+print(df)
 
-# 获取实时市盈率（需要安装akshare最新版）
-pe_df = ak.stock_a_lg_indicator(symbol=stock_code)
-latest_pe = pe_df.iloc[-1]['市盈率-动态']
+# 获取股票基本面指标（含动态市盈率）
+market_cap = ak.stock_zh_a_spot_em()
+print(market_cap)
+target_pe = market_cap.loc[market_cap['代码'] == '002050', '市盈率-动态'].values[0]
+print(target_pe)
 
 """
 Step 2：多维度指标计算
@@ -31,10 +42,7 @@ df['MA5'] = df['收盘'].rolling(5).mean()
 df['MA20'] = df['收盘'].rolling(20).mean()
 
 # 2. MACD
-df['MACD'], df['MACD_Signal'], _ = talib.MACD(df['收盘'],
-                                              fastperiod=12,
-                                              slowperiod=26,
-                                              signalperiod=9)
+df['MACD'], df['MACD_Signal'], _ = talib.MACD(df['收盘'], fastperiod=12, slowperiod=26, signalperiod=9)
 
 # 3. RSI
 df['RSI14'] = talib.RSI(df['收盘'], timeperiod=14)
@@ -47,7 +55,7 @@ df['Vol_MA5'] = df['成交量'].rolling(5).mean()  # 成交量5日均线
 # 动态市盈率分位点（需历史数据）
 # 假设已有历史市盈率数据pe_history
 # 计算当前PE所处百分位
-current_pe_percentile = (pe_history < latest_pe).mean()
+# current_pe_percentile = (pe_history < latest_pe).mean()
 
 """
 Step 3：信号生成逻辑
@@ -68,7 +76,8 @@ condition_rsi = (df['RSI14'] > 30) & (df['RSI14'].shift(1) <= 30)
 condition_volume = (df['成交额'] > 1e8) & (df['成交额/成交量'] > df['成交额/成交量'].rolling(20).mean())
 
 # 条件5：估值合理（基本面）
-condition_pe = current_pe_percentile < 0.7  # PE处于历史30%分位以下
+# condition_pe = current_pe_percentile < 0.7  # PE处于历史30%分位以下
+condition_pe = True
 
 # 综合信号（需全部满足）
 buy_condition = condition_ma & condition_macd & condition_rsi & condition_volume & condition_pe
@@ -119,37 +128,37 @@ plt.legend()
 plt.tight_layout()
 plt.show()
 
-"""
-策略优化方向
-"""
-
-# 动态权重调整
-# 给不同条件赋予权重（需用机器学习优化）
-conditions = {
-    'ma': 0.3,
-    'macd': 0.2,
-    'rsi': 0.15,
-    'volume': 0.25,
-    'pe': 0.1
-}
-
-df['Score'] = (condition_ma * conditions['ma'] +
-               condition_macd * conditions['macd'] +
-               condition_rsi * conditions['rsi'] +
-               condition_volume * conditions['volume'] +
-               condition_pe * conditions['pe'])
-
-# 设置阈值触发交易
-df.loc[df['Score'] > 0.7, 'Signal'] = 1
-
-# 行业对比增强
-# 获取行业平均PE
-industry_pe = ak.stock_board_industry_pe_ths(symbol="通用设备")  # 三花所属行业
-
-# 计算相对估值
-df['Industry_PE'] = industry_pe['市盈率']
-df['PE_Ratio'] = latest_pe / df['Industry_PE']
-condition_industry_pe = df['PE_Ratio'] < 1  # 低于行业平均
+# """
+# 策略优化方向
+# """
+#
+# # 动态权重调整
+# # 给不同条件赋予权重（需用机器学习优化）
+# conditions = {
+#     'ma': 0.3,
+#     'macd': 0.2,
+#     'rsi': 0.15,
+#     'volume': 0.25,
+#     'pe': 0.1
+# }
+#
+# df['Score'] = (condition_ma * conditions['ma'] +
+#                condition_macd * conditions['macd'] +
+#                condition_rsi * conditions['rsi'] +
+#                condition_volume * conditions['volume'] +
+#                condition_pe * conditions['pe'])
+#
+# # 设置阈值触发交易
+# df.loc[df['Score'] > 0.7, 'Signal'] = 1
+#
+# # 行业对比增强
+# # 获取行业平均PE
+# industry_pe = ak.stock_board_industry_pe_ths(symbol="通用设备")  # 三花所属行业
+#
+# # 计算相对估值
+# df['Industry_PE'] = industry_pe['市盈率']
+# df['PE_Ratio'] = latest_pe / df['Industry_PE']
+# condition_industry_pe = df['PE_Ratio'] < 1  # 低于行业平均
 
 """
 注意事项
