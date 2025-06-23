@@ -2,18 +2,15 @@
 重新选择择时的方式
 """
 
-import akshare as ak
-import pandas as pd
-import numpy as np
-import talib
-import matplotlib.pyplot as plt
 import logging
 from logging import INFO
 from typing import NoReturn
 
-# 设置中文字体
-plt.rcParams['font.sans-serif'] = ['SimHei']
-plt.rcParams['axes.unicode_minus'] = False
+import akshare as ak
+import pandas as pd
+from pyecharts.charts import Line
+from pyecharts import options as opts
+from pyecharts.globals import ThemeType
 
 
 class StockAnalyze:
@@ -24,6 +21,16 @@ class StockAnalyze:
         :param stock_code: 股票代码，"002050"（三花智控）
         """
         self.stock_code = stock_code
+
+    @staticmethod
+    def regular_transfer(value: float, decimal_num: int = 2) -> str:
+        """
+        格式化转换百分比
+        :param value:
+        :param decimal_num:
+        :return:
+        """
+        return f"{value * 100:.{decimal_num}f}%"
 
     def get_stock_data(self) -> pd.DataFrame:
         """
@@ -39,240 +46,148 @@ class StockAnalyze:
         )
         return basic_df
 
-    @staticmethod
-    def cal_moving_average_convergence_divergence(
-            df: pd.DataFrame,
-            fast_period: int,
-            slow_period: int,
-            signal_period: int
-    ) -> pd.DataFrame:
+    def implement_strategy(self, basic_df: pd.DataFrame) -> pd.DataFrame:
         """
-        MACD指标（动态参数）
-        :param df: 基础数据
-        :param fast_period: EMA12
-        :param slow_period: EMA26
-        :param signal_period: DIF的9日EMA
+        交易策略
+        :param basic_df:
         :return:
         """
-        df['MACD'], df['MACD_Signal'], _ = talib.MACD(df['收盘'],
-                                                      fastperiod=fast_period,
-                                                      slowperiod=slow_period,
-                                                      signalperiod=signal_period)
-        return df
+        basic_df['持有不动'] = basic_df['收盘'] * 1000
 
-    @staticmethod
-    def avg_price(
-            df: pd.DataFrame
-    ) -> pd.DataFrame:
-        """
-        平均成交价（动态计算）
-        :param df:
-        :return:
-        """
-        df['平均成交价'] = df['成交额'] / (df['成交量'] * 100)  # 单位：元/股
-        df['AvgPrice_MA20'] = df['平均成交价'].rolling(20).mean()
-        return df
+        # 初始化仓位和资金列
+        basic_df['持仓'] = 0
+        basic_df['资金余额'] = 0.0
 
-    @staticmethod
-    def trading_volume(
-            df: pd.DataFrame
-    ) -> pd.DataFrame:
-        """
-        成交量系统（结合波动率）
-        :param df:
-        :return:
-        """
-        df['Vol_MA5'] = df['成交量'].rolling(5).mean()
-        df['Vol_Ratio'] = df['成交量'] / df['Vol_MA5']
-        return df
+        # 首日初始化
+        first_date = basic_df.index[0]
+        basic_df.at[first_date, '持仓'] = 1000
+        basic_df.at[first_date, '资金余额'] = 0.0
 
-    @staticmethod
-    def turnover_rate(
-            df: pd.DataFrame
-    ) -> pd.DataFrame:
+        # 状态缓存变量
+        prev_hold = 1000
+        prev_cash = 0.0
+
+        # 初始资金
+        initial_fund = basic_df['开盘'].iloc[0] * 1000
+
+        for i, (index, row) in enumerate(basic_df.iterrows()):
+            if i > 0:
+                # 传递前日状态
+                basic_df.at[index, '持仓'] = prev_hold
+                basic_df.at[index, '资金余额'] = prev_cash
+
+                current_hold = basic_df.at[index, '持仓']
+                current_cash = basic_df.at[index, '资金余额']
+
+                if row['涨跌幅'] >= 5:  # 涨幅≥5%卖出
+                    sell_amount = current_hold * row['收盘']
+                    basic_df.at[index, '资金余额'] = current_cash + sell_amount
+                    basic_df.at[index, '持仓'] = 0
+
+                elif row['涨跌幅'] <= -5:  # 跌幅≤-5%买入
+                    # 整手交易计算 (100股倍数)
+                    buy_volume = (current_cash // (row['收盘'] * 100)) * 100
+                    if buy_volume > 0:  # 仅当可买入时操作
+                        buy_amount = buy_volume * row['收盘']
+                        basic_df.at[index, '资金余额'] = current_cash - buy_amount
+                        basic_df.at[index, '持仓'] = current_hold + buy_volume
+
+                # 更新状态缓存
+                prev_hold = basic_df.at[index, '持仓']
+                prev_cash = basic_df.at[index, '资金余额']
+
+                print(f"日期: {index} | 持仓: {prev_hold} | 资金: {prev_cash:.2f}")
+
+        # 计算总资产
+        basic_df['总资产'] = basic_df['持仓'] * basic_df['收盘'] + basic_df['资金余额']
+
+        hold_yield_rate = self.regular_transfer((basic_df['持有不动'].iloc[-1] - initial_fund) / initial_fund)
+        strategy_yield_rate = self.regular_transfer((basic_df['总资产'].iloc[-1] - initial_fund) / initial_fund)
+
+        print(f'持有不动策略累计收益率：{hold_yield_rate}')
+        print(f'交易策略累计收益率：{strategy_yield_rate}')
+
+        return basic_df
+
+    def visualize_assets(self, basic_df: pd.DataFrame) -> NoReturn:
         """
-        换手率策略（分级阈值）
-        :param df:
-        :return:
+        可视化资产走势
+        :param basic_df: 包含日期、持有不动、总资产的DataFrame
         """
-        df['换手率_MA5'] = df['换手率'].rolling(5).mean()
-        df['换手率等级'] = pd.cut(
-            df['换手率'],
-            bins=[0, 3, 7, 15, 100],
-            labels=['低迷', '温和', '活跃', '异常']
+        # 准备数据
+        dates = basic_df.index.strftime("%Y-%m-%d").tolist()
+        static_assets = basic_df['持有不动'].round(2).tolist()
+        dynamic_assets = basic_df['总资产'].round(2).tolist()
+
+        # 创建折线图对象
+        line = Line(
+            init_opts=opts.InitOpts(
+                theme=ThemeType.LIGHT,
+                width="1200px",
+                height="600px"
+            )
         )
-        return df
 
-    @staticmethod
-    def generate_signal(df: pd.DataFrame) -> pd.DataFrame:
-        """
-        简化版信号生成（涨跌阈值触发）
-        规则：
-        1. 初始持仓1000手
-        2. 当日涨幅>5%时全部卖出（转为空仓）
-        3. 当日跌幅>5%时用全部可用资金买入（空仓转满仓）
-        """
-        df['Signal'] = 0  # 初始化信号列
+        # 添加x轴数据（日期）
+        line.add_xaxis(xaxis_data=dates)
 
-        # 计算日收益率（使用收盘价）
-        df['Return'] = df['收盘'].pct_change()
+        # 添加两条折线
+        line.add_yaxis(
+            series_name="持有不动策略",
+            y_axis=static_assets,
+            is_smooth=True,
+            color="#5793f3",
+            linestyle_opts=opts.LineStyleOpts(width=3)
+        )
+        line.add_yaxis(
+            series_name="动态择时策略",
+            y_axis=dynamic_assets,
+            is_smooth=True,
+            color="#d14a61",
+            linestyle_opts=opts.LineStyleOpts(width=3, type_="dashed")
+        )
 
-        # 生成交易信号（考虑持仓状态）
-        position = 1  # 初始持仓状态：满仓（1000手）
-        for i in range(1, len(df)):
-            prev_return = df['Return'].iloc[i]
+        # 全局配置
+        line.set_global_opts(
+            title_opts=opts.TitleOpts(
+                title="资产收益对比分析",
+                subtitle=f"股票代码：{self.stock_code}",
+                pos_left="20%"
+            ),
+            tooltip_opts=opts.TooltipOpts(
+                trigger="axis",
+                axis_pointer_type="cross"
+            ),
+            legend_opts=opts.LegendOpts(pos_top="8%"),
+            xaxis_opts=opts.AxisOpts(
+                name="日期",
+                axislabel_opts=opts.LabelOpts(rotate=45),
+                splitline_opts=opts.SplitLineOpts(is_show=False)
+            ),
+            yaxis_opts=opts.AxisOpts(
+                name="资产金额（元）",
+                axislabel_opts=opts.LabelOpts(formatter="{value} 元"),
+                splitline_opts=opts.SplitLineOpts(is_show=True)
+            ),
+            datazoom_opts=[
+                opts.DataZoomOpts(
+                    is_show=True,
+                    type_="slider",
+                    range_start=0,
+                    range_end=100
+                ),
+                opts.DataZoomOpts(type_="inside")
+            ]
+        )
 
-            # 当前持仓状态下生成信号
-            if position == 1 and prev_return > 0.05:  # 满仓且涨幅达标
-                df['Signal'].iloc[i] = -1  # 卖出信号
-                position = 0
-            elif position == 0 and prev_return < -0.05:  # 空仓且跌幅达标
-                df['Signal'].iloc[i] = 1  # 买入信号
-                position = 1
-
-        return df
-
-    @staticmethod
-    def calculate_metrics(returns: pd.Series) -> pd.Series:
-        """
-        关键绩效指标计算
-        :param returns:
-        :return:
-        """
-        total_return = returns.iloc[-1] - 1
-        annual_return = (1 + total_return) ** (252 / len(returns)) - 1
-        max_drawdown = (returns / returns.cummax() - 1).min()
-        sharpe_ratio = returns.mean() / returns.std() * np.sqrt(252)
-        return pd.Series([total_return, annual_return, max_drawdown, sharpe_ratio],
-                         index=['总收益', '年化收益', '最大回撤', '夏普比率'])
-
-    def generate_strategy_result(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        策略回测（动态仓位管理）
-        """
-        # 初始化资金参数
-        initial_cash = 1000 * df['收盘'].iloc[0]  # 1000手初始资金
-        cash = initial_cash
-        shares = 1000  # 初始持仓
-
-        # 记录每日资产
-        df['Strategy_Value'] = np.nan
-        df['Strategy_Value'].iloc[0] = initial_cash  # 初始资产
-
-        # 交易成本参数
-        trade_cost_rate = 0.0025  # 双边0.25%
-
-        for i in range(1, len(df)):
-            price = df['收盘'].iloc[i]
-            prev_price = df['收盘'].iloc[i - 1]
-
-            # 执行交易信号
-            if df['Signal'].iloc[i] == -1:  # 卖出
-                cash += shares * price * (1 - trade_cost_rate)
-                shares = 0
-            elif df['Signal'].iloc[i] == 1:  # 买入
-                if cash > 0:
-                    shares = cash / (price * (1 + trade_cost_rate))
-                    cash = 0
-
-            # 计算当日资产
-            df['Strategy_Value'].iloc[i] = cash + shares * price
-
-        # 计算收益率
-        df['Strategy_Return'] = df['Strategy_Value'].pct_change()
-        df['BuyHold_Return'] = df['收盘'] / df['收盘'].iloc[0] - 1  # 持有不动收益
-
-        # 可视化对比
-        plt.figure(figsize=(14, 7))
-        plt.plot(df['Strategy_Value'] / initial_cash, label='阈值策略')
-        plt.plot(df['收盘'] / df['收盘'].iloc[0], label='持有不动', linestyle='--')
-        plt.title('策略对比（2023-2025）')
-        plt.legend()
-        plt.savefig(fr'D:\stock\tmp\09\{self.stock_code}_简化策略对比.png')
-
-        return df
-
-    def visualization(
-            self,
-            df: pd.DataFrame,
-            fast_period: int,
-            slow_period: int,
-            signal_period: int
-    ) -> NoReturn:
-        """
-        Step 5：可视化（突出四指标关系）
-        :param df:
-        :param fast_period: EMA12
-        :param slow_period: EMA26
-        :param signal_period: DIF的9日EMA
-        :return:
-        """
-        fig = plt.figure(figsize=(16, 12))
-        gs = fig.add_gridspec(4, 1)
-
-        # 价格与信号
-        ax1 = fig.add_subplot(gs[0])
-        ax1.plot(df['收盘'], label='Price', alpha=0.8)
-        ax1.scatter(df[df['Signal'] == 1].index, df[df['Signal'] == 1]['收盘'],
-                    marker='^', color='g', s=100, label='买入信号')
-        ax1.scatter(df[df['Signal'] == -1].index, df[df['Signal'] == -1]['收盘'],
-                    marker='v', color='r', s=100, label='止损信号')
-        ax1.set_title(f'{self.stock_code}四因子交易信号图', fontsize=14)
-
-        # MACD指标
-        ax2 = fig.add_subplot(gs[1])
-        ax2.plot(df['MACD'], label=f'MACD({fast_period},{slow_period})', linewidth=1)
-        ax2.plot(df['MACD_Signal'], label=f'Signal({signal_period})', linewidth=1)
-        ax2.bar(df.index, df['MACD'] - df['MACD_Signal'],
-                color=np.where((df['MACD'] - df['MACD_Signal']) > 0, 'g', 'r'), alpha=0.3)
-        ax2.axhline(0, linestyle='--', color='gray')
-        ax2.set_title('MACD指标动态', fontsize=12)
-
-        # 量价关系
-        ax3 = fig.add_subplot(gs[2])
-        ax3.bar(df.index, df['成交量'] / 1e6, color=np.where(df['Vol_Ratio'] > 1.5, 'orange', 'gray'),
-                alpha=0.6, label='成交量(百万股)')
-        ax3.plot(df['Vol_MA5'] / 1e6, label='5日成交量均线', color='purple', linewidth=1.5)
-        ax3_twin = ax3.twinx()
-        ax3_twin.plot(df['平均成交价'], label='平均成交价', color='b', linewidth=1.5)
-        ax3_twin.plot(df['AvgPrice_MA20'], label='20日均价线', linestyle='--', color='darkblue')
-        ax3.set_title('量价关系分析', fontsize=12)
-        ax3.legend(loc='upper left')
-        ax3_twin.legend(loc='upper right')
-
-        # 换手率分析
-        ax4 = fig.add_subplot(gs[3])
-        colors = {'低迷': 'gray', '温和': 'skyblue', '活跃': 'orange', '异常': 'red'}
-        for level in colors.keys():
-            idx = df['换手率等级'] == level
-            ax4.scatter(df.index[idx], df['换手率'][idx],
-                        color=colors[level], label=level, alpha=0.6)
-        ax4.plot(df['换手率_MA5'], label='5日平均换手率', color='purple', linewidth=1.5)
-        ax4.set_title('换手率分级监控（参考网页9规则）', fontsize=12)
-        ax4.legend()
-
-        plt.tight_layout()
-        plt.savefig(fr'D:\stock\tmp\08\{self.stock_code}四因子交易信号图.png')
+        # 生成HTML文件
+        line.render("tmp/09/asset_comparison.html")
+        print("可视化文件已生成：asset_comparison.html")
 
     def main(self):
-        """
-        主程序
-        :return:
-        """
-        # 1. 获取基础行情数据
         basic_df = self.get_stock_data()
-        # 2. MACD指标
-        df = self.cal_moving_average_convergence_divergence(basic_df, 7, 22, 9)
-        # 3. 平均成交价
-        df = self.avg_price(df)
-        # 4. 成交量系统
-        df = self.trading_volume(df)
-        # 5. 换手率策略（分级阈值）
-        df = self.turnover_rate(df)
-        # 6. 信号生成（多条件复合验证）
-        df = self.generate_signal(df)
-        # 7. 策略回测（增加换手率分析）
-        self.generate_strategy_result(df)
+        result_df = self.implement_strategy(basic_df)
+        self.visualize_assets(result_df)
 
 
 if __name__ == '__main__':
