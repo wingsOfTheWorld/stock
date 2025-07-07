@@ -7,17 +7,8 @@
 """
 
 
-import logging
-from logging import INFO
-from typing import NoReturn
-
-import akshare as ak
 import pandas as pd
 import baostock as bs
-
-from pyecharts.charts import Line
-from pyecharts import options as opts
-from pyecharts.globals import ThemeType
 
 
 class StockAnalyze:
@@ -35,9 +26,9 @@ class StockAnalyze:
         :return:
         """
         lg = bs.login()
-        rs = bs.query_history_k_data_plus("sz.002050", "date,peTTM", start_date='1900-01-01', adjustflag='1')
+        rs = bs.query_history_k_data_plus("sz.002050", "date,peTTM", start_date='2024-12-31', adjustflag='1')
         pe_df = pd.DataFrame(rs.data, columns=['日期', '市盈率（TTM）'])
-        pe_df.to_csv('002050_pe_hfq.csv')
+        pe_df.to_csv(r'D:\stock\tmp\10\002050_pe_hfq.csv', index=False)
         print(pe_df)
 
 
